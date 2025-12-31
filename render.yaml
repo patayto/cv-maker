@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: jobhunt-api
+    env: python
+    buildCommand: |
+      pip install uv && uv sync --frozen
+    startCommand: |
+      uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        sync: false  # Set manually to Supabase connection string
+      - key: CORS_ORIGINS
+        sync: false  # Set to your Netlify URL
+      - key: AUTH_USERNAME
+        sync: false
+      - key: AUTH_PASSWORD_HASH
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
