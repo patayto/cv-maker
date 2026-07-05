@@ -1,0 +1,22 @@
+.git/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+*.log
+
+# Frontend build artifacts (built inside the frontend container)
+frontend/node_modules/
+frontend/dist/
+
+# Backend dev/test files not needed in the image
+backend/__pycache__/
+backend/tests/
+backend/debug/
+backend/pytest.ini
+
+# Secrets — never bake these into images
+.env
+.env.*
+!.env.docker

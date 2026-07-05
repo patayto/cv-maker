@@ -1,11 +1,13 @@
-export enum ApplicationStatus {
-  YET_TO_APPLY = "yet_to_apply",
-  APPLIED_WAITING = "applied_waiting",
-  JOB_OFFERED = "job_offered",
-  JOB_ACCEPTED = "job_accepted",
-  APPLICATION_REJECTED = "application_rejected",
-  JOB_REJECTED = "job_rejected",
-}
+export const ApplicationStatus = {
+  YET_TO_APPLY: "yet_to_apply",
+  APPLIED_WAITING: "applied_waiting",
+  JOB_OFFERED: "job_offered",
+  JOB_ACCEPTED: "job_accepted",
+  APPLICATION_REJECTED: "application_rejected",
+  JOB_REJECTED: "job_rejected",
+} as const;
+
+export type ApplicationStatus = typeof ApplicationStatus[keyof typeof ApplicationStatus];
 
 export interface Job {
   id: number;
@@ -27,6 +29,27 @@ export interface Job {
   recruiter_name: string | null;
   recruiter_email: string | null;
   recruiter_linkedin: string | null;
+
+  // Extended fields - parsed from job postings
+  parsed_skills: string[] | null;
+  parsed_requirements: string[] | null;
+  parsed_responsibilities: string[] | null;
+
+  // Salary structure
+  salary_min: number | null;
+  salary_max: number | null;
+  salary_currency: string | null;
+  net_salary_yearly: number | null;
+  net_salary_monthly: number | null;
+
+  // Metadata
+  experience_level: string | null;
+  workplace_type: string | null;
+  employment_type: string | null;
+
+  // Generated content references
+  generated_cv_id: number | null;
+  generated_cover_letter_id: number | null;
 }
 
 export interface JobCreate {
@@ -45,9 +68,35 @@ export interface JobCreate {
   location?: string;
   salary?: string;
   notes?: string;
+
+  // Extended fields - parsed from job postings
+  parsed_skills?: string[];
+  parsed_requirements?: string[];
+  parsed_responsibilities?: string[];
+
+  // Salary structure
+  salary_min?: number;
+  salary_max?: number;
+  salary_currency?: string;
+  net_salary_yearly?: number;
+  net_salary_monthly?: number;
+
+  // Metadata
+  experience_level?: string;
+  workplace_type?: string;
+  employment_type?: string;
+
+  // Generated content references
+  generated_cv_id?: number;
+  generated_cover_letter_id?: number;
+
+  // Recruiter information
+  recruiter_name?: string;
+  recruiter_email?: string;
+  recruiter_linkedin?: string;
 }
 
-export interface JobUpdate extends JobCreate {}
+export type JobUpdate = JobCreate;
 
 export interface ContactHistory {
   id: number;

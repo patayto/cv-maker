@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import type { Job, ContactHistory, FollowUpMessage } from '../types/job';
+import type { Job, ContactHistory } from '../types/job';
 import { contactApi } from '../services/api';
 
 interface FollowUpModalProps {

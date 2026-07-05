@@ -15,12 +15,12 @@ const STYLE_DESCRIPTIONS = {
   storytelling: 'Narrative-driven - weaves experience into a compelling story'
 };
 
-export default function CoverLetterEditor({ job, selectedCVBlocks, onSaved }: CoverLetterEditorProps) {
+export default function CoverLetterEditor({ job, onSaved }: CoverLetterEditorProps) {
   const [content, setContent] = useState('');
   const [style, setStyle] = useState<CoverLetterStyle>('professional');
   const [isGenerating, setIsGenerating] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
-  const [savedLetter, setSavedLetter] = useState<GeneratedCoverLetter | null>(null);
+  const [, setSavedLetter] = useState<GeneratedCoverLetter | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
