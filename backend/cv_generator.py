@@ -2,14 +2,15 @@
 CV Generator Module
 
 Generates tailored CVs from lego blocks matched to job requirements.
-Uses Claude AI for intelligent block selection when API key is available.
+Uses the OpenRouter LLM for intelligent block selection when configured.
 """
 
 import os
 from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
-from anthropic import Anthropic
 import json
+
+import llm
 
 try:
     from models import Job, LegoBlock, GeneratedCV
@@ -22,10 +23,7 @@ class CVGenerator:
     """Generate tailored CVs from lego blocks matched to job requirements"""
 
     def __init__(self):
-        self.anthropic_client = None
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if api_key:
-            self.anthropic_client = Anthropic(api_key=api_key)
+        self.llm_client = llm.get_client()
 
     def select_blocks(self, job_id: int, db: Session, max_blocks: int = 6) -> List:
         """
@@ -50,13 +48,13 @@ class CVGenerator:
             return []
 
         # Use LLM if available, otherwise use keyword matching
-        if self.anthropic_client:
+        if self.llm_client:
             return self._select_blocks_with_llm(job, all_blocks, max_blocks)
         else:
             return self._select_blocks_fallback(job, all_blocks, max_blocks)
 
     def _select_blocks_with_llm(self, job, all_blocks: List, max_blocks: int) -> List:
-        """Select blocks using Claude AI based on job requirements"""
+        """Select blocks using the LLM based on job requirements"""
         # Prepare job context
         job_context = {
             "role": job.role,
@@ -97,14 +95,7 @@ Select the {max_blocks} most relevant block IDs that:
 Respond with ONLY a JSON array of block IDs, e.g.: [1, 5, 8, 12, 15, 20]"""
 
         try:
-            message = self.anthropic_client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=256,
-                messages=[{"role": "user", "content": prompt}]
-            )
-
-            # Parse response to get block IDs
-            response_text = message.content[0].text.strip()
+            response_text = llm.complete(self.llm_client, prompt).strip()
             # Extract JSON array from response
             if "[" in response_text:
                 json_str = response_text[response_text.find("["):response_text.rfind("]")+1]
@@ -222,7 +213,7 @@ Respond with ONLY a JSON array of block IDs, e.g.: [1, 5, 8, 12, 15, 20]"""
         Returns:
             Customized block content
         """
-        if not self.anthropic_client:
+        if not self.llm_client:
             # No API key, return original content
             return block.content
 
@@ -238,12 +229,7 @@ Original Statement:
 Provide ONLY the tailored version, no explanation."""
 
         try:
-            message = self.anthropic_client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=256,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return message.content[0].text.strip()
+            return llm.complete(self.llm_client, prompt).strip()
         except Exception as e:
             print(f"Block customization failed: {e}")
             return block.content

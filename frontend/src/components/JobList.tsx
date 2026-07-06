@@ -3,32 +3,15 @@ import { jobsApi, contactApi } from '../services/api';
 import type { Job, ApplicationStatus, StalenessInfo } from '../types/job';
 import { StalenessIndicator } from './StalenessIndicator';
 import { FollowUpModal } from './FollowUpModal';
+import { Badge } from './Badge';
+import { statusColors, statusLabels } from '../utils/status';
 
 interface JobListProps {
   onView: (job: Job) => void;
   onEdit: (job: Job) => void;
-  refreshTrigger: number;
 }
 
-const statusColors: Record<string, string> = {
-  yet_to_apply: 'bg-gray-100 text-gray-800',
-  applied_waiting: 'bg-blue-100 text-blue-800',
-  job_offered: 'bg-green-100 text-green-800',
-  job_accepted: 'bg-emerald-100 text-emerald-800',
-  application_rejected: 'bg-red-100 text-red-800',
-  job_rejected: 'bg-orange-100 text-orange-800',
-};
-
-const statusLabels: Record<string, string> = {
-  yet_to_apply: 'Yet to Apply',
-  applied_waiting: 'Applied - Waiting',
-  job_offered: 'Job Offered',
-  job_accepted: 'Job Accepted',
-  application_rejected: 'Application Rejected',
-  job_rejected: 'Job Rejected',
-};
-
-export default function JobList({ onView, onEdit, refreshTrigger }: JobListProps) {
+export default function JobList({ onView, onEdit }: JobListProps) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +22,7 @@ export default function JobList({ onView, onEdit, refreshTrigger }: JobListProps
 
   useEffect(() => {
     fetchJobs();
-  }, [refreshTrigger, filterStatus, filterCompany]);
+  }, [filterStatus, filterCompany]);
 
   const fetchJobs = async () => {
     try {
@@ -89,11 +72,13 @@ export default function JobList({ onView, onEdit, refreshTrigger }: JobListProps
   const handleDelete = async (id: number) => {
     if (!confirm('Are you sure you want to delete this job application?')) return;
 
+    const previousJobs = jobs;
+    setJobs(jobs.filter(job => job.id !== id));
     try {
       await jobsApi.deleteJob(id);
-      setJobs(jobs.filter(job => job.id !== id));
     } catch (err) {
-      alert('Failed to delete job');
+      setJobs(previousJobs);
+      setError('Failed to delete job. Please try again.');
       console.error('Error deleting job:', err);
     }
   };
@@ -106,16 +91,13 @@ export default function JobList({ onView, onEdit, refreshTrigger }: JobListProps
     );
   }
 
-  if (error) {
-    return (
-      <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-        <p className="text-red-800">{error}</p>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-4">
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+          <p className="text-red-800">{error}</p>
+        </div>
+      )}
       {/* Filters */}
       <div className="bg-white rounded-lg shadow p-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -172,6 +154,20 @@ export default function JobList({ onView, onEdit, refreshTrigger }: JobListProps
                         {statusLabels[job.status]}
                       </span>
                     )}
+                    {job.fit_score != null && (
+                      <span
+                        className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          job.fit_score >= 60
+                            ? 'bg-green-100 text-green-800'
+                            : job.fit_score >= 45
+                              ? 'bg-yellow-100 text-yellow-800'
+                              : 'bg-red-100 text-red-800'
+                        }`}
+                        title={job.fit_verdict ?? undefined}
+                      >
+                        Fit {job.fit_score}
+                      </span>
+                    )}
                     {stalenessMap[job.id] && (
                       <StalenessIndicator
                         daysSinceUpdate={stalenessMap[job.id].days_since_update}
@@ -196,6 +192,66 @@ export default function JobList({ onView, onEdit, refreshTrigger }: JobListProps
                   {job.notes && (
                     <p className="text-sm text-gray-600 mt-3 italic">{job.notes}</p>
                   )}
+
+                  {/* Extended Fields Display */}
+                  <div className="mt-3 space-y-2">
+                    {/* Metadata Badges */}
+                    {(job.experience_level || job.workplace_type || job.employment_type) && (
+                      <div className="flex flex-wrap gap-2">
+                        {job.experience_level && (
+                          <Badge variant="info" size="sm">
+                            {job.experience_level}
+                          </Badge>
+                        )}
+                        {job.workplace_type && (
+                          <Badge variant="success" size="sm">
+                            {job.workplace_type}
+                          </Badge>
+                        )}
+                        {job.employment_type && (
+                          <Badge variant="purple" size="sm">
+                            {job.employment_type}
+                          </Badge>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Skills Tags */}
+                    {job.parsed_skills && job.parsed_skills.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {job.parsed_skills.slice(0, 3).map((skill, idx) => (
+                          <span
+                            key={idx}
+                            className="inline-block px-2 py-0.5 text-xs rounded-full bg-blue-100 text-blue-800"
+                          >
+                            {skill}
+                          </span>
+                        ))}
+                        {job.parsed_skills.length > 3 && (
+                          <span className="inline-block px-2 py-0.5 text-xs rounded-full bg-gray-100 text-gray-600">
+                            +{job.parsed_skills.length - 3} more
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Salary Range */}
+                    {job.salary_min && job.salary_max && job.salary_currency && (
+                      <p className="text-sm text-gray-600">
+                        💰 {job.salary_currency === 'GBP' && '£'}
+                        {job.salary_currency === 'USD' && '$'}
+                        {job.salary_currency === 'EUR' && '€'}
+                        {job.salary_min.toLocaleString('en-GB')} - {job.salary_max.toLocaleString('en-GB')}
+                      </p>
+                    )}
+
+                    {/* Recruiter */}
+                    {job.recruiter_name && (
+                      <p className="text-sm text-gray-600">
+                        👤 Recruiter: {job.recruiter_name}
+                      </p>
+                    )}
+                  </div>
                 </div>
                 <div className="flex gap-2 ml-4">
                   <button

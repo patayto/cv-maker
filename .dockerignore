@@ -19,4 +19,5 @@ backend/pytest.ini
 # Secrets — never bake these into images
 .env
 .env.*
+backend/.env
 !.env.docker

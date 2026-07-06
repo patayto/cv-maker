@@ -44,16 +44,44 @@ class JobBase(BaseModel):
     recruiter_linkedin: Optional[str] = None
 
 class JobCreate(JobBase):
-    pass
+    # A job without a role and company is untrackable; frontend enforces the same
+    role: str
+    company: str
 
 class JobUpdate(JobBase):
     pass
 
 class JobResponse(JobBase):
     id: int
+    # From the most recent fit evaluation, if any (model properties)
+    fit_score: Optional[int] = None
+    fit_verdict: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+
+# Fit evaluation schemas
+class FitEvaluationResponse(BaseModel):
+    id: int
+    job_id: int
+    technical_skills: int
+    experience_match: int
+    behavioral_fit: int
+    career_alignment: int
+    location_pass: bool
+    overall_score: int
+    verdict: str
+    key_strengths: Optional[List[str]] = None
+    gaps: Optional[List[str]] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ProfileContent(BaseModel):
+    content: str
 
 
 # LegoBlock schemas
@@ -250,6 +278,9 @@ class CVGenerationResponse(BaseModel):
     cv_id: int
     selected_blocks: List[LegoBlockResponse]
     latex: str
+    pdf_path: Optional[str] = None
+    page_count: Optional[int] = None
+    checks: Optional[Dict[str, bool]] = None
 
 
 # ==================== COVER LETTER SCHEMAS ====================
@@ -261,6 +292,9 @@ class CoverLetterGenerationRequest(BaseModel):
 class CoverLetterGenerationResponse(BaseModel):
     letter_id: int
     content: str
+    pdf_path: Optional[str] = None
+    page_count: Optional[int] = None
+    checks: Optional[Dict[str, bool]] = None
 
 
 class CoverLetterUpdateRequest(BaseModel):

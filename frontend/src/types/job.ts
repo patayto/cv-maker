@@ -50,6 +50,25 @@ export interface Job {
   // Generated content references
   generated_cv_id: number | null;
   generated_cover_letter_id: number | null;
+
+  // From the most recent fit evaluation, if any
+  fit_score?: number | null;
+  fit_verdict?: string | null;
+}
+
+export interface FitEvaluation {
+  id: number;
+  job_id: number;
+  technical_skills: number;
+  experience_match: number;
+  behavioral_fit: number;
+  career_alignment: number;
+  location_pass: boolean;
+  overall_score: number;
+  verdict: string;
+  key_strengths: string[] | null;
+  gaps: string[] | null;
+  created_at: string;
 }
 
 export interface JobCreate {

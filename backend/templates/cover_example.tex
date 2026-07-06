@@ -1,0 +1,35 @@
+%% Example cover letter using cover.cls (xelatex only - needs fontspec).
+%% One page, Lato/Raleway fonts. Bullet lists must live OUTSIDE
+%% \lettercontent{} (its trailing \\ breaks on \end{itemize}) and be
+%% wrapped in the Raleway font spec so they match the body text.
+\documentclass[]{cover}
+\usepackage[english]{babel}
+\begin{document}
+
+\namesection{}{\Huge{First Last}}{email@example.com | +44 0000 000000 | linkedin.com/in/example}
+
+\vspace{0.5cm}
+
+\companyname{Company Name}
+\companyaddress{City, Country}
+
+\currentdate{\today}
+
+\lettercontent{Dear Hiring Manager,}
+
+\lettercontent{Opening paragraph: name the role, and lead with what you will solve for the employer.}
+
+\lettercontent{Body paragraph: your approach, methods and tools, backed by one or two brief past examples. Here is how my experience maps to the role:}
+
+{\raggedright\fontspec[Path = OpenFonts/fonts/raleway/]{Raleway-Medium}\fontsize{11pt}{13pt}\selectfont
+\begin{itemize}
+  \item First bullet mapping experience to a stated requirement.
+  \item Second bullet mapping experience to a stated requirement.
+\end{itemize}\par}
+
+\lettercontent{Closing paragraph: motivation for this company specifically, and a forward-looking sign-off. I look forward to hearing from you.}
+
+\closing{Best regards,}
+\lettercontent{First Last}
+
+\end{document}

@@ -29,3 +29,13 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Python bytecode / test artifacts
+__pycache__/
+*.pyc
+.coverage
+htmlcov/
+
+# Personal data — CV block content and candidate profile stay local
+backend/lego_blocks_cache.json
+backend/profile/profile.md

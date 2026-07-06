@@ -29,9 +29,9 @@ services:
       AUTH_USERNAME: ${AUTH_USERNAME:-admin}
       AUTH_PASSWORD_HASH: ${AUTH_PASSWORD_HASH:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      LINKEDIN_LI_AT: ${LINKEDIN_LI_AT:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
+      OPENROUTER_MODELS: ${OPENROUTER_MODELS:-}
     volumes:
       - uploads:/app/backend/uploads
     ports:

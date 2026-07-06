@@ -1,10 +1,24 @@
 import axios from 'axios';
-import type { Job, JobCreate, JobUpdate, ApplicationStatus, ContactHistory, StalenessInfo, FollowUpMessage } from '../types/job';
+import type { Job, JobCreate, JobUpdate, ApplicationStatus, ContactHistory, StalenessInfo, FollowUpMessage, FitEvaluation } from '../types/job';
+
+export interface LinkedInJobCard {
+  id: string;
+  title: string;
+  company: string | null;
+  company_url: string | null;
+  location: string | null;
+  date: string | null;
+  url: string;
+  tracked?: boolean;
+}
 
 // Use environment variable for API URL, fallback to local development
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8192';
 
-// HTTP Basic auth credentials (hardcoded for initial deployment)
+// Check if we're in local development (connecting to localhost)
+const isLocalDevelopment = API_BASE_URL.includes('localhost') || API_BASE_URL.includes('127.0.0.1');
+
+// HTTP Basic auth credentials (only used in production)
 // TODO: Replace with proper login flow in future
 const AUTH_USERNAME = 'admin';
 const AUTH_PASSWORD = 'changeme';
@@ -17,12 +31,14 @@ const api = axios.create({
   withCredentials: true, // Include credentials in cross-origin requests
 });
 
-// Add axios interceptor to include HTTP Basic auth in all requests
+// Add axios interceptor to include HTTP Basic auth in production requests
 api.interceptors.request.use(
   (config) => {
-    // Add Authorization header with Basic auth
-    const credentials = btoa(`${AUTH_USERNAME}:${AUTH_PASSWORD}`);
-    config.headers.Authorization = `Basic ${credentials}`;
+    // Only add auth header in production (not local development)
+    if (!isLocalDevelopment) {
+      const credentials = btoa(`${AUTH_USERNAME}:${AUTH_PASSWORD}`);
+      config.headers.Authorization = `Basic ${credentials}`;
+    }
     return config;
   },
   (error) => {
@@ -71,8 +87,8 @@ export const jobsApi = {
     return response.data;
   },
 
-  // Parse job URL
-  parseJobUrl: async (url: string, useLlm: boolean = true): Promise<{
+  // Parse job URL or HTML
+  parseJobUrl: async (url: string, useLlm: boolean = true, html?: string): Promise<{
     success: boolean;
     data?: Record<string, any>;
     missing_fields?: string[];
@@ -80,8 +96,21 @@ export const jobsApi = {
   }> => {
     const response = await api.post('/parse-job-url', {
       url,
+      html,
       use_llm: useLlm,
     });
+    return response.data;
+  },
+
+  // Search LinkedIn public job listings
+  searchLinkedIn: async (params: {
+    keywords?: string;
+    location?: string;
+    jobage?: number;
+    remote?: string;
+    page?: number;
+  }): Promise<{ results: LinkedInJobCard[]; page: number }> => {
+    const response = await api.get('/linkedin/search', { params });
     return response.data;
   },
 
@@ -205,6 +234,9 @@ export interface CVGenerationResponse {
   cv_id: number;
   selected_blocks: any[];
   latex: string;
+  pdf_path: string | null;
+  page_count: number | null;
+  checks: Record<string, boolean> | null;
 }
 
 export const cvApi = {
@@ -229,6 +261,9 @@ export interface CoverLetterGenerationRequest {
 export interface CoverLetterGenerationResponse {
   letter_id: number;
   content: string;
+  pdf_path: string | null;
+  page_count: number | null;
+  checks: Record<string, boolean> | null;
 }
 
 export interface CoverLetterUpdateRequest {
@@ -267,6 +302,51 @@ export interface ContactHistoryCreate {
   message_content?: string;
   notes?: string;
 }
+
+export const fitApi = {
+  // Run a fit evaluation for a job (LLM-backed)
+  evaluateFit: async (jobId: number): Promise<FitEvaluation> => {
+    const response = await api.post<FitEvaluation>(`/jobs/${jobId}/evaluate-fit`);
+    return response.data;
+  },
+
+  // Get the most recent fit evaluation (404 if none yet)
+  getFit: async (jobId: number): Promise<FitEvaluation> => {
+    const response = await api.get<FitEvaluation>(`/jobs/${jobId}/fit`);
+    return response.data;
+  },
+};
+
+export const profileApi = {
+  getProfile: async (): Promise<string> => {
+    const response = await api.get<{ content: string }>('/profile');
+    return response.data.content;
+  },
+
+  updateProfile: async (content: string): Promise<void> => {
+    await api.put('/profile', { content });
+  },
+};
+
+export interface GapHeatmapEntry {
+  priority: string;
+  area: string;
+  type: string;
+  source: string;
+}
+
+export interface GapAnalysisResponse {
+  jobs_analyzed: number;
+  hard_gaps: { skill: string; score: number; job_count: number }[];
+  heatmap: GapHeatmapEntry[];
+}
+
+export const gapApi = {
+  getGapAnalysis: async (): Promise<GapAnalysisResponse> => {
+    const response = await api.get<GapAnalysisResponse>('/gap-analysis');
+    return response.data;
+  },
+};
 
 export const contactApi = {
   getHistory: async (jobId: number): Promise<ContactHistory[]> => {

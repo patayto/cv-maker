@@ -78,7 +78,7 @@ class LinkedInParser:
 
             # Check for signs of blocked/login page
             if any(indicator in text_lower for indicator in ['sign in', 'join now', 'log in', 'authwall']):
-                job_data['notes'] = f'LinkedIn requires authentication. Add your li_at cookie to .env file (LINKEDIN_LI_AT), or copy the job details manually.{debug_str}'
+                job_data['notes'] = f'The pasted HTML looks like a LinkedIn login page, not a job posting. Open the job while logged in and copy the full page HTML.{debug_str}'
             else:
                 job_data['notes'] = f'Could not extract job details from LinkedIn. The page structure may have changed or the job may no longer be available.{debug_str}'
 

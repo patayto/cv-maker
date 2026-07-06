@@ -3,6 +3,9 @@ import type { Job } from '../types/job';
 import SalaryCalculator from './SalaryCalculator';
 import CVGenerator from './CVGenerator';
 import CoverLetterEditor from './CoverLetterEditor';
+import FitScoreCard from './FitScoreCard';
+import { API_BASE_URL } from '../services/api';
+import { statusColors, statusLabels } from '../utils/status';
 
 interface JobViewProps {
   job: Job;
@@ -11,25 +14,7 @@ interface JobViewProps {
   onDelete: () => void;
 }
 
-type TabType = 'details' | 'salary' | 'cv' | 'coverLetter';
-
-const statusColors: Record<string, string> = {
-  yet_to_apply: 'bg-gray-100 text-gray-800',
-  applied_waiting: 'bg-blue-100 text-blue-800',
-  job_offered: 'bg-green-100 text-green-800',
-  job_accepted: 'bg-emerald-100 text-emerald-800',
-  application_rejected: 'bg-red-100 text-red-800',
-  job_rejected: 'bg-orange-100 text-orange-800',
-};
-
-const statusLabels: Record<string, string> = {
-  yet_to_apply: 'Yet to Apply',
-  applied_waiting: 'Applied - Waiting',
-  job_offered: 'Job Offered',
-  job_accepted: 'Job Accepted',
-  application_rejected: 'Application Rejected',
-  job_rejected: 'Job Rejected',
-};
+type TabType = 'details' | 'fit' | 'salary' | 'cv' | 'coverLetter';
 
 export default function JobView({ job, onEdit, onClose, onDelete }: JobViewProps) {
   const [activeTab, setActiveTab] = useState<TabType>('details');
@@ -58,7 +43,7 @@ export default function JobView({ job, onEdit, onClose, onDelete }: JobViewProps
             </a>
           ) : link && value.startsWith('uploads/') ? (
             <a
-              href={`http://127.0.0.1:8000/${value}`}
+              href={`${API_BASE_URL}/${value}`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-blue-600 hover:text-blue-800 hover:underline inline-flex items-center gap-1"
@@ -82,6 +67,87 @@ export default function JobView({ job, onEdit, onClose, onDelete }: JobViewProps
         <InfoRow label="Salary" value={job.salary} />
         <InfoRow label="Job Posting URL" value={job.url} link />
       </dl>
+
+      {/* Metadata */}
+      {(job.experience_level || job.workplace_type || job.employment_type) && (
+        <dl className="bg-gray-50 rounded-lg p-6 mb-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Job Metadata</h3>
+          <InfoRow label="Experience Level" value={job.experience_level} />
+          <InfoRow label="Workplace Type" value={job.workplace_type} />
+          <InfoRow label="Employment Type" value={job.employment_type} />
+        </dl>
+      )}
+
+      {/* Skills & Requirements */}
+      {(job.parsed_skills || job.parsed_requirements || job.parsed_responsibilities) && (
+        <div className="bg-gray-50 rounded-lg p-6 mb-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Skills & Requirements</h3>
+
+          {job.parsed_skills && job.parsed_skills.length > 0 && (
+            <div className="mb-4">
+              <h4 className="text-sm font-medium text-gray-700 mb-2">Required Skills</h4>
+              <div className="flex flex-wrap gap-2">
+                {job.parsed_skills.map((skill, idx) => (
+                  <span key={idx} className="inline-block px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm">
+                    {skill}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {job.parsed_requirements && job.parsed_requirements.length > 0 && (
+            <div className="mb-4">
+              <h4 className="text-sm font-medium text-gray-700 mb-2">Requirements</h4>
+              <ul className="list-disc list-inside space-y-1 text-gray-700">
+                {job.parsed_requirements.map((req, idx) => (
+                  <li key={idx}>{req}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {job.parsed_responsibilities && job.parsed_responsibilities.length > 0 && (
+            <div>
+              <h4 className="text-sm font-medium text-gray-700 mb-2">Responsibilities</h4>
+              <ul className="list-disc list-inside space-y-1 text-gray-700">
+                {job.parsed_responsibilities.map((resp, idx) => (
+                  <li key={idx}>{resp}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Salary Details */}
+      {(job.salary_min || job.salary_max || job.net_salary_yearly || job.net_salary_monthly) && (
+        <dl className="bg-gray-50 rounded-lg p-6 mb-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Salary Details</h3>
+          {job.salary_min && job.salary_max && job.salary_currency && (
+            <InfoRow
+              label="Salary Range"
+              value={`${job.salary_currency}${job.salary_min.toLocaleString()} - ${job.salary_currency}${job.salary_max.toLocaleString()}`}
+            />
+          )}
+          {job.net_salary_yearly && (
+            <InfoRow label="Net Salary (Yearly)" value={`£${job.net_salary_yearly.toLocaleString()}`} />
+          )}
+          {job.net_salary_monthly && (
+            <InfoRow label="Net Salary (Monthly)" value={`£${job.net_salary_monthly.toLocaleString()}`} />
+          )}
+        </dl>
+      )}
+
+      {/* Recruiter Information */}
+      {(job.recruiter_name || job.recruiter_email || job.recruiter_linkedin) && (
+        <dl className="bg-gray-50 rounded-lg p-6 mb-6">
+          <h3 className="text-lg font-semibold text-gray-900 mb-4">Recruiter Contact</h3>
+          <InfoRow label="Name" value={job.recruiter_name} />
+          <InfoRow label="Email" value={job.recruiter_email} />
+          <InfoRow label="LinkedIn" value={job.recruiter_linkedin} link />
+        </dl>
+      )}
 
       {/* Dates */}
       {(job.opening_date || job.closing_date || job.application_date) && (
@@ -172,6 +238,16 @@ export default function JobView({ job, onEdit, onClose, onDelete }: JobViewProps
             Details
           </button>
           <button
+            onClick={() => setActiveTab('fit')}
+            className={`pb-3 px-1 border-b-2 font-medium text-sm transition-colors ${
+              activeTab === 'fit'
+                ? 'border-blue-600 text-blue-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            Fit Score
+          </button>
+          <button
             onClick={() => setActiveTab('salary')}
             className={`pb-3 px-1 border-b-2 font-medium text-sm transition-colors ${
               activeTab === 'salary'
@@ -207,6 +283,7 @@ export default function JobView({ job, onEdit, onClose, onDelete }: JobViewProps
       {/* Tab Content */}
       <div>
         {activeTab === 'details' && <DetailsTab />}
+        {activeTab === 'fit' && <FitScoreCard jobId={job.id} />}
         {activeTab === 'salary' && <SalaryCalculator initialSalary={job.salary || undefined} />}
         {activeTab === 'cv' && <CVGenerator job={job} />}
         {activeTab === 'coverLetter' && <CoverLetterEditor job={job} />}

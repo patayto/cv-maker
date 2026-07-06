@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, Text, Enum as SQLEnum, ForeignKey, DateTime, Numeric
+from sqlalchemy import Boolean, Column, Integer, String, Date, Text, Enum as SQLEnum, ForeignKey, DateTime, Numeric
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import relationship
 from database import Base
@@ -47,8 +47,10 @@ class Job(Base):
     net_salary_monthly = Column(Numeric(10, 2))
     workplace_type = Column(String(50))  # Remote, Hybrid, On-site
     employment_type = Column(String(50))  # Full-time, Part-time, Contract, etc.
-    generated_cv_id = Column(Integer, ForeignKey('generated_cvs.id'))
-    generated_cover_letter_id = Column(Integer, ForeignKey('generated_cover_letters.id'))
+    # use_alter breaks the FK cycle with generated_cvs/generated_cover_letters
+    # (they each have a job_id FK back to jobs) so create_all/drop_all can sort tables
+    generated_cv_id = Column(Integer, ForeignKey('generated_cvs.id', use_alter=True, name='fk_jobs_generated_cv_id'))
+    generated_cover_letter_id = Column(Integer, ForeignKey('generated_cover_letters.id', use_alter=True, name='fk_jobs_generated_cover_letter_id'))
 
     # Contact tracking fields
     recruiter_name = Column(String(255))
@@ -59,6 +61,23 @@ class Job(Base):
     generated_cv = relationship("GeneratedCV", foreign_keys=[generated_cv_id])
     generated_cover_letter = relationship("GeneratedCoverLetter", foreign_keys=[generated_cover_letter_id])
     contact_history = relationship("ContactHistory", back_populates="job", cascade="all, delete-orphan")
+    fit_evaluations = relationship(
+        "JobFitEvaluation",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="JobFitEvaluation.created_at.desc()",
+    )
+
+    @property
+    def fit_score(self):
+        """Overall score of the most recent fit evaluation, if any."""
+        # ponytail: lazy-loads per job in list views (N+1); fine at personal
+        # scale, switch to selectinload if the job list ever gets slow
+        return self.fit_evaluations[0].overall_score if self.fit_evaluations else None
+
+    @property
+    def fit_verdict(self):
+        return self.fit_evaluations[0].verdict if self.fit_evaluations else None
 
 
 # LegoBlock model for storing reusable CV content blocks
@@ -102,10 +121,32 @@ class GeneratedCoverLetter(Base):
     job_id = Column(Integer, ForeignKey('jobs.id'))
     content = Column(Text, nullable=False)
     template_used = Column(String(100))
+    pdf_path = Column(Text)  # Path to compiled PDF
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationship
     job = relationship("Job", foreign_keys=[job_id])
+
+
+# JobFitEvaluation model - 4 scored dimensions + location pass/fail, weighted
+# overall score and verdict (rubric adapted from ai-job-search 04-job-evaluation.md)
+class JobFitEvaluation(Base):
+    __tablename__ = "job_fit_evaluations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(Integer, ForeignKey('jobs.id'), nullable=False)
+    technical_skills = Column(Integer, nullable=False)   # 0-100, weight 30%
+    experience_match = Column(Integer, nullable=False)   # 0-100, weight 25%
+    behavioral_fit = Column(Integer, nullable=False)     # 0-100, weight 15%
+    career_alignment = Column(Integer, nullable=False)   # 0-100, weight 30%
+    location_pass = Column(Boolean, nullable=False, default=True)
+    overall_score = Column(Integer, nullable=False)
+    verdict = Column(String(50), nullable=False)
+    key_strengths = Column(ARRAY(String))
+    gaps = Column(ARRAY(String))
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    job = relationship("Job", back_populates="fit_evaluations")
 
 
 # TaxConfig model for storing tax calculation parameters

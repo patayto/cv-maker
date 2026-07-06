@@ -13,6 +13,25 @@ def create_job(db: Session, job: schemas.JobCreate) -> models.Job:
     db.refresh(db_job)
     return db_job
 
+def find_duplicate_job(
+    db: Session,
+    url: Optional[str] = None,
+    role: Optional[str] = None,
+    company: Optional[str] = None,
+) -> Optional[models.Job]:
+    """Find an existing job matching by exact URL, or by role+company (case-insensitive)."""
+    if url:
+        existing = db.query(models.Job).filter(models.Job.url == url).first()
+        if existing:
+            return existing
+    if role and company:
+        return (
+            db.query(models.Job)
+            .filter(models.Job.role.ilike(role), models.Job.company.ilike(company))
+            .first()
+        )
+    return None
+
 # READ
 def get_job(db: Session, job_id: int) -> Optional[models.Job]:
     """Get a single job by ID"""
@@ -56,6 +75,27 @@ def delete_job(db: Session, job_id: int) -> bool:
     db.delete(db_job)
     db.commit()
     return True
+
+
+# ==================== FIT EVALUATIONS ====================
+
+def create_fit_evaluation(db: Session, job_id: int, scores: Dict) -> models.JobFitEvaluation:
+    """Store a fit evaluation for a job"""
+    evaluation = models.JobFitEvaluation(job_id=job_id, **scores)
+    db.add(evaluation)
+    db.commit()
+    db.refresh(evaluation)
+    return evaluation
+
+
+def get_latest_fit_evaluation(db: Session, job_id: int) -> Optional[models.JobFitEvaluation]:
+    """Get the most recent fit evaluation for a job"""
+    return (
+        db.query(models.JobFitEvaluation)
+        .filter(models.JobFitEvaluation.job_id == job_id)
+        .order_by(models.JobFitEvaluation.created_at.desc())
+        .first()
+    )
 
 
 # ==================== CONTACT TRACKING ====================

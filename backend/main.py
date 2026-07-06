@@ -10,7 +10,14 @@ import models
 import schemas
 import crud
 from job_parser import job_parser
+import document_pipeline
+import fit_evaluator
+import gap_analyzer
+import latex_service
+import linkedin_guest
+import requests
 from message_generator import MessageGenerator
+from lego_blocks_matcher import get_matcher
 from auth import verify_auth
 from pydantic import BaseModel
 import aiofiles
@@ -75,7 +82,8 @@ async def test_db_connection(db: Session = Depends(get_db), username: str = Depe
 # ==================== JOB URL PARSER ENDPOINT ====================
 
 class ParseUrlRequest(BaseModel):
-    url: str
+    url: str = ""  # Optional when html is provided
+    html: Optional[str] = None  # Raw HTML content (alternative to URL)
     use_llm: bool = True
 
 class ParseUrlResponse(BaseModel):
@@ -87,23 +95,136 @@ class ParseUrlResponse(BaseModel):
 @app.post("/parse-job-url", response_model=ParseUrlResponse)
 async def parse_job_url(request: ParseUrlRequest, username: str = Depends(verify_auth)):
     """
-    Parse a job posting URL and extract job details.
+    Parse a job posting from URL or raw HTML and extract job details.
+
+    Modes:
+    - URL mode: Provide 'url' field to fetch and parse
+    - HTML mode: Provide 'html' field with raw HTML content (bypasses fetching)
+
     Uses web scraping and optionally Claude AI to extract information.
     """
     try:
-        job_data, missing_fields = job_parser.parse_job_url(request.url, use_llm=request.use_llm)
+        job_data, missing_fields = job_parser.parse_job_url(
+            request.url,
+            use_llm=request.use_llm,
+            html=request.html
+        )
 
         return ParseUrlResponse(
             success=True,
             data=job_data,
             missing_fields=missing_fields
         )
-    except Exception as e:
+    except ConnectionError:
         return ParseUrlResponse(
             success=False,
-            error=str(e),
+            error=f"Network error: Unable to connect to {request.url}. Please check your internet connection.",
             missing_fields=[]
         )
+    except TimeoutError:
+        return ParseUrlResponse(
+            success=False,
+            error=f"Timeout error: The request to {request.url} took too long. Please try again.",
+            missing_fields=[]
+        )
+    except ValueError as e:
+        return ParseUrlResponse(
+            success=False,
+            error=f"Invalid URL: {str(e)}",
+            missing_fields=[]
+        )
+    except Exception as e:
+        error_message = str(e)
+        # Provide helpful error messages for common issues
+        if 'rate limit' in error_message.lower() or '429' in error_message:
+            error_message = "Rate limited: the site is blocking requests. Please wait a few minutes and try again."
+
+        return ParseUrlResponse(
+            success=False,
+            error=error_message,
+            missing_fields=[]
+        )
+
+# ==================== LINKEDIN JOB SEARCH ENDPOINT ====================
+
+@app.get("/linkedin/search")
+async def linkedin_search(
+    keywords: Optional[str] = Query(None, description="Search keywords, e.g. job title or skill"),
+    location: Optional[str] = Query(None, description='Location, e.g. "London, United Kingdom" or "Remote"'),
+    jobage: Optional[int] = Query(None, ge=1, description="Only jobs posted within this many days"),
+    remote: Optional[str] = Query(None, description="Workplace type: remote, hybrid, or onsite"),
+    page: int = Query(1, ge=1, description="Result page (10 results per page)"),
+    db: Session = Depends(get_db),
+    username: str = Depends(verify_auth),
+):
+    """Search LinkedIn public job listings (unauthenticated jobs-guest API).
+
+    Personal use only - keep request volume low.
+    """
+    try:
+        cards = linkedin_guest.search_jobs(
+            query=keywords, location=location, jobage_days=jobage, remote=remote, page=page
+        )
+    except (ConnectionError, requests.RequestException) as e:
+        raise HTTPException(status_code=502, detail=f"LinkedIn search failed: {e}")
+
+    # Flag results already tracked (LinkedIn URL formats vary, so match by job id)
+    tracked_ids = set()
+    for (url,) in db.query(models.Job.url).filter(models.Job.url.ilike("%linkedin.com%")).all():
+        job_id = linkedin_guest.id_from_url(url or "")
+        if job_id:
+            tracked_ids.add(job_id)
+
+    return {
+        "results": [{**card.to_dict(), "tracked": card.id in tracked_ids} for card in cards],
+        "page": page,
+    }
+
+# ==================== CANDIDATE PROFILE & FIT EVALUATION ====================
+
+@app.get("/profile", response_model=schemas.ProfileContent)
+def get_profile(username: str = Depends(verify_auth)):
+    """Get the candidate profile markdown"""
+    return schemas.ProfileContent(content=fit_evaluator.read_profile())
+
+@app.put("/profile", response_model=schemas.ProfileContent)
+def update_profile(profile: schemas.ProfileContent, username: str = Depends(verify_auth)):
+    """Replace the candidate profile markdown"""
+    fit_evaluator.write_profile(profile.content)
+    return profile
+
+@app.post("/jobs/{job_id}/evaluate-fit", response_model=schemas.FitEvaluationResponse)
+def evaluate_job_fit(job_id: int, db: Session = Depends(get_db), username: str = Depends(verify_auth)):
+    """Score this job against the candidate profile (LLM-backed)"""
+    job = crud.get_job(db=db, job_id=job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    try:
+        scores = fit_evaluator.evaluate_fit(job)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return crud.create_fit_evaluation(db=db, job_id=job_id, scores=scores)
+
+@app.get("/jobs/{job_id}/fit", response_model=schemas.FitEvaluationResponse)
+def get_job_fit(job_id: int, db: Session = Depends(get_db), username: str = Depends(verify_auth)):
+    """Get the most recent fit evaluation for this job"""
+    evaluation = crud.get_latest_fit_evaluation(db=db, job_id=job_id)
+    if not evaluation:
+        raise HTTPException(status_code=404, detail="No fit evaluation for this job yet")
+    return evaluation
+
+# ==================== SKILL GAP ANALYSIS ====================
+
+@app.get("/gap-analysis")
+def gap_analysis(db: Session = Depends(get_db), username: str = Depends(verify_auth)):
+    """Aggregate skill gaps across all tracked jobs vs. the candidate profile."""
+    jobs = db.query(models.Job).all()
+    try:
+        return gap_analyzer.analyze_gaps(jobs)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 # ==================== FILE UPLOAD ENDPOINT ====================
 
@@ -152,7 +273,16 @@ async def delete_file(filename: str, username: str = Depends(verify_auth)):
 # CREATE
 @app.post("/jobs", response_model=schemas.JobResponse, status_code=201)
 def create_job(job: schemas.JobCreate, db: Session = Depends(get_db), username: str = Depends(verify_auth)):
-    """Create a new job application"""
+    """Create a new job application. Returns 409 if the job is already tracked."""
+    existing = crud.find_duplicate_job(db=db, url=job.url, role=job.role, company=job.company)
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": f"Already tracked: {existing.role} at {existing.company} (job #{existing.id})",
+                "existing_job_id": existing.id,
+            },
+        )
     return crud.create_job(db=db, job=job)
 
 # READ
@@ -198,6 +328,83 @@ def delete_job(job_id: int, db: Session = Depends(get_db), username: str = Depen
     if not success:
         raise HTTPException(status_code=404, detail="Job not found")
     return None
+
+
+# ==================== CV BLOCK MATCHING ENDPOINT ====================
+
+class BlockMatchResponse(BaseModel):
+    block_id: str
+    block_text: str
+    company: str
+    strength: str
+    relevance_score: int
+    match_reason: str
+
+class MatchBlocksResponse(BaseModel):
+    success: bool
+    matches: List[BlockMatchResponse]
+    error: Optional[str] = None
+
+@app.get("/jobs/{job_id}/match-cv-blocks", response_model=MatchBlocksResponse)
+def match_cv_blocks(
+    job_id: int,
+    max_blocks: int = Query(10, ge=1, le=20, description="Maximum number of blocks to return"),
+    db: Session = Depends(get_db),
+    username: str = Depends(verify_auth)
+):
+    """
+    Match relevant CV experience blocks to a specific job posting
+
+    Uses AI to analyze job requirements and select the most relevant
+    CV bullet points from the pre-defined lego blocks library.
+
+    Returns blocks ranked by relevance with reasoning for each match.
+    """
+    try:
+        # Fetch the job from database
+        db_job = crud.get_job(db=db, job_id=job_id)
+        if db_job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        # Get the matcher instance
+        matcher = get_matcher()
+
+        # Match blocks for this job
+        matches = matcher.match_blocks_for_job(
+            job_title=db_job.role or "Software Engineer",
+            company=db_job.company or "Unknown Company",
+            skills=db_job.parsed_skills or [],
+            requirements=db_job.parsed_requirements or [],
+            responsibilities=db_job.parsed_responsibilities or [],
+            max_blocks=max_blocks
+        )
+
+        # Convert to response format
+        match_responses = [
+            BlockMatchResponse(
+                block_id=match.block.id,
+                block_text=match.block.text,
+                company=match.block.company,
+                strength=match.block.strength,
+                relevance_score=match.relevance_score,
+                match_reason=match.match_reason
+            )
+            for match in matches
+        ]
+
+        return MatchBlocksResponse(
+            success=True,
+            matches=match_responses
+        )
+
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
+    except Exception as e:
+        return MatchBlocksResponse(
+            success=False,
+            matches=[],
+            error=f"Failed to match CV blocks: {str(e)}"
+        )
 
 
 # ==================== SALARY CALCULATION ENDPOINT ====================
@@ -381,26 +588,28 @@ def generate_cv(
     db: Session = Depends(get_db),
     username: str = Depends(verify_auth)
 ):
-    """Generate a CV for a specific job by selecting top-ranked lego blocks."""
+    """Generate a tailored 2-page CV: draft -> review -> compile -> verify."""
+    from cv_generator import cv_generator
+
+    job = db.query(models.Job).filter(models.Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    selected_blocks = cv_generator.select_blocks(job_id, db, max_blocks=request.max_blocks)
+
     try:
-        from cv_generator import cv_generator
+        result = document_pipeline.generate_cv(job, selected_blocks)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except (RuntimeError, latex_service.LatexCompileError) as e:
+        raise HTTPException(status_code=503, detail=f"CV generation failed: {e}")
 
-        # Verify job exists
-        job = db.query(models.Job).filter(models.Job.id == job_id).first()
-        if not job:
-            raise HTTPException(status_code=404, detail="Job not found")
-
-        # Select blocks
-        selected_blocks = cv_generator.select_blocks(job_id, db, max_blocks=request.max_blocks)
-
-        # Generate LaTeX
-        latex = cv_generator.generate_latex(selected_blocks)
-
-        # Save to database
+    try:
         generated_cv = models.GeneratedCV(
             job_id=job_id,
             selected_blocks=[block.id for block in selected_blocks],
-            customizations={}
+            customizations={},
+            pdf_path=result["pdf_path"],
         )
         db.add(generated_cv)
         db.commit()
@@ -408,21 +617,20 @@ def generate_cv(
 
         # Update job reference
         job.generated_cv_id = generated_cv.id
+        job.cv = result["pdf_path"]
         db.commit()
-
-        return schemas.CVGenerationResponse(
-            cv_id=generated_cv.id,
-            selected_blocks=[schemas.LegoBlockResponse.from_orm(block) for block in selected_blocks],
-            latex=latex
-        )
-    except ImportError:
-        raise HTTPException(
-            status_code=503,
-            detail="CV generator module not available. Please ensure cv_generator.py is in the backend directory."
-        )
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"CV generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to store generated CV: {e}")
+
+    return schemas.CVGenerationResponse(
+        cv_id=generated_cv.id,
+        selected_blocks=[schemas.LegoBlockResponse.from_orm(block) for block in selected_blocks],
+        latex=result["latex"],
+        pdf_path=result["pdf_path"],
+        page_count=result["page_count"],
+        checks=result["checks"],
+    )
 
 
 # ==================== COVER LETTER ENDPOINTS ====================
@@ -434,23 +642,29 @@ def generate_cover_letter(
     db: Session = Depends(get_db),
     username: str = Depends(verify_auth)
 ):
-    """Generate a cover letter for a specific job."""
+    """Generate a tailored 1-page cover letter: draft -> review -> compile -> verify."""
+    from cv_generator import cv_generator
+
+    job = db.query(models.Job).filter(models.Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Reuse the CV block selection so the letter draws on the same evidence
+    selected_blocks = cv_generator.select_blocks(job_id, db, max_blocks=5)
+
     try:
-        from cover_letter_generator import cover_letter_generator
+        result = document_pipeline.generate_cover_letter(job, selected_blocks)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except (RuntimeError, latex_service.LatexCompileError) as e:
+        raise HTTPException(status_code=503, detail=f"Cover letter generation failed: {e}")
 
-        # Verify job exists
-        job = db.query(models.Job).filter(models.Job.id == job_id).first()
-        if not job:
-            raise HTTPException(status_code=404, detail="Job not found")
-
-        # Generate cover letter
-        content = cover_letter_generator.generate(job_id, db, style=request.style)
-
-        # Save to database
+    try:
         generated_letter = models.GeneratedCoverLetter(
             job_id=job_id,
-            content=content,
-            template_used=request.style
+            content=result["latex"],
+            template_used=request.style,
+            pdf_path=result["pdf_path"],
         )
         db.add(generated_letter)
         db.commit()
@@ -458,20 +672,19 @@ def generate_cover_letter(
 
         # Update job reference
         job.generated_cover_letter_id = generated_letter.id
+        job.cover_letter = result["pdf_path"]
         db.commit()
-
-        return schemas.CoverLetterGenerationResponse(
-            letter_id=generated_letter.id,
-            content=content
-        )
-    except ImportError:
-        raise HTTPException(
-            status_code=503,
-            detail="Cover letter generator module not available. Please ensure cover_letter_generator.py is in the backend directory."
-        )
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Cover letter generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to store cover letter: {e}")
+
+    return schemas.CoverLetterGenerationResponse(
+        letter_id=generated_letter.id,
+        content=result["latex"],
+        pdf_path=result["pdf_path"],
+        page_count=result["page_count"],
+        checks=result["checks"],
+    )
 
 
 @app.put("/generated-cover-letters/{letter_id}", response_model=schemas.CoverLetterGenerationResponse)
@@ -495,6 +708,19 @@ def update_cover_letter(
         # Customize with instructions
         new_content = cover_letter_generator.customize(letter.content, request.instructions)
 
+        # Recompile so the stored PDF matches the revised content
+        page_count = None
+        checks = None
+        if "\\documentclass" in new_content:
+            import time as _time
+            stem = f"cover_letter_{letter.id}_{int(_time.time())}"
+            try:
+                _, pdf_path, page_count = latex_service.compile_tex(new_content, stem, "xelatex")
+                letter.pdf_path = pdf_path
+                checks = {"compiled": True, "page_count_ok": page_count == 1}
+            except (latex_service.LatexCompileError, latex_service.LatexNotInstalled):
+                checks = {"compiled": False, "page_count_ok": False}
+
         # Update in database
         letter.content = new_content
         db.commit()
@@ -502,12 +728,10 @@ def update_cover_letter(
 
         return schemas.CoverLetterGenerationResponse(
             letter_id=letter.id,
-            content=letter.content
-        )
-    except ImportError:
-        raise HTTPException(
-            status_code=503,
-            detail="Cover letter generator module not available. Please ensure cover_letter_generator.py is in the backend directory."
+            content=letter.content,
+            pdf_path=letter.pdf_path,
+            page_count=page_count,
+            checks=checks,
         )
     except Exception as e:
         db.rollback()

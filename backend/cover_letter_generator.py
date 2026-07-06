@@ -1,14 +1,15 @@
 """
 Cover Letter Generator Module
 
-Generates and customizes cover letters using Claude AI.
-Falls back to template-based generation when API key is not available.
+Generates and customizes cover letters using the OpenRouter LLM.
+Falls back to template-based generation when no API key is configured.
 """
 
 import os
 from typing import Optional
 from sqlalchemy.orm import Session
-from anthropic import Anthropic
+
+import llm
 
 try:
     from models import Job, GeneratedCV, LegoBlock
@@ -20,10 +21,7 @@ class CoverLetterGenerator:
     """Generate and customize cover letters using Claude AI"""
 
     def __init__(self):
-        self.anthropic_client = None
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if api_key:
-            self.anthropic_client = Anthropic(api_key=api_key)
+        self.llm_client = llm.get_client()
 
     def generate(self, job_id: int, db: Session, style: str = "professional") -> str:
         """
@@ -51,13 +49,13 @@ class CoverLetterGenerator:
                     LegoBlock.id.in_(generated_cv.selected_blocks)
                 ).all()
 
-        if self.anthropic_client:
+        if self.llm_client:
             return self._generate_with_llm(job, lego_blocks, style)
         else:
             return self._generate_fallback(job, style)
 
     def _generate_with_llm(self, job, lego_blocks: list, style: str) -> str:
-        """Generate cover letter using Claude AI"""
+        """Generate cover letter using the LLM"""
         # Prepare context
         job_context = f"""
 Role: {job.role or 'N/A'}
@@ -106,12 +104,7 @@ Keep it concise (250-300 words).
 """
 
         try:
-            message = self.anthropic_client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=1024,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return message.content[0].text.strip()
+            return llm.complete(self.llm_client, prompt).strip()
         except Exception as e:
             print(f"LLM generation failed: {e}, using fallback template")
             return self._generate_fallback(job, style)
@@ -147,7 +140,7 @@ Sincerely,
         Returns:
             Customized cover letter
         """
-        if not self.anthropic_client:
+        if not self.llm_client:
             # No API key, return original
             return base_letter
 
@@ -161,12 +154,7 @@ Original Cover Letter:
 Provide the revised cover letter."""
 
         try:
-            message = self.anthropic_client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=1024,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return message.content[0].text.strip()
+            return llm.complete(self.llm_client, prompt).strip()
         except Exception as e:
             print(f"Customization failed: {e}")
             return base_letter

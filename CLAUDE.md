@@ -8,7 +8,7 @@ CV Maker is a full-stack job application tracking system with:
 - **Backend**: FastAPI (Python) API server with SQLAlchemy ORM
 - **Database**: PostgreSQL with `cv_maker_db` database
 - **Frontend**: React with TypeScript + Vite + TailwindCSS
-- **AI Features**: URL parsing with web scraping + Claude AI / Gemini AI integration
+- **AI Features**: OpenRouter LLM (job parsing, fit scoring, CV/cover letter generation, gap analysis) + zero-auth LinkedIn jobs-guest search
 
 ## Running the Application
 
@@ -26,8 +26,8 @@ docker compose up            # subsequent runs
 The compose stack has three services: `db` (Postgres 16), `backend` (FastAPI on port 8192), `frontend` (nginx on port 82 proxying `/api/` → backend).
 
 **Environment variables** — edit `.env` (copied from `.env.docker`):
-- `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` — AI features (optional, features degrade gracefully)
-- `LINKEDIN_LI_AT` — LinkedIn scraping cookie (optional)
+- `OPENROUTER_API_KEY` — AI features (optional, features degrade gracefully)
+- `OPENROUTER_MODELS` — comma-separated model list; requests rotate round-robin with exponential backoff on failures (`OPENROUTER_MODEL` singular also accepted)
 - `DISABLE_AUTH=true` — default; set to `false` + add `AUTH_PASSWORD_HASH` for shared deployments
 - `POSTGRES_PASSWORD` — change for non-local deployments
 
@@ -67,7 +67,9 @@ Requires a local Postgres instance with `cv_maker_db` database (connection strin
 ### Database schema
 Managed by `docker/init.sql` (authoritative for Docker) and SQLAlchemy `Base.metadata.create_all()` (creates base tables on startup). Migrations in `backend/migrations/` extend the schema and are idempotent (`IF NOT EXISTS`).
 
-Key tables: `jobs`, `lego_blocks`, `generated_cvs`, `generated_cover_letters`, `contact_history`, `tax_configs`
+Key tables: `jobs`, `lego_blocks`, `generated_cvs`, `generated_cover_letters`, `contact_history`, `tax_configs`, `job_fit_evaluations`
+
+Alembic is configured in `backend/alembic/` for schema changes on existing databases (`cd backend && alembic upgrade head`); `create_all` still bootstraps fresh databases.
 
 The `application_status` enum is created explicitly in `init.sql` because the SQLAlchemy model uses `create_type=False`.
 
@@ -114,7 +116,13 @@ psql -d cv_maker_db -f backend/migrations/001_add_jobhunt_tables.sql  # run a mi
 | `backend/job_parser.py` | AI-powered job URL scraping + parsing |
 | `backend/auth.py` | HTTP Basic auth (`DISABLE_AUTH=true` skips it) |
 | `backend/tax_calculator.py` | UK salary/tax calculations |
-| `backend/lego_blocks_matcher.py` | Gemini AI matching of job requirements to CV blocks |
+| `backend/lego_blocks_matcher.py` | LLM matching of job requirements to CV blocks |
+| `backend/llm.py` | Shared OpenRouter client (round-robin over `OPENROUTER_MODELS` with backoff) |
+| `backend/linkedin_guest.py` | LinkedIn public jobs-guest API client (search + job detail, no auth) |
+| `backend/fit_evaluator.py` | 4-dimension weighted job-fit scoring against the candidate profile |
+| `backend/document_pipeline.py` | CV/cover letter: draft → LLM review → LaTeX compile → page-count verify |
+| `backend/latex_service.py` | lualatex/xelatex compilation + pypdf page counts (templates in `backend/templates/`) |
+| `backend/gap_analyzer.py` | Fit-weighted skill gap heatmap across tracked jobs |
 
 ### API endpoints (port 8192)
 
@@ -123,7 +131,12 @@ psql -d cv_maker_db -f backend/migrations/001_add_jobhunt_tables.sql  # run a mi
 - `GET|PUT|DELETE /jobs/{id}` — read/update/delete
 - `POST /parse-job-url` — scrape and AI-parse a job posting
 - `POST /calculate-salary` — UK net salary calculation
-- `GET /jobs/{id}/match-cv-blocks` — Gemini AI CV block matching
+- `GET /jobs/{id}/match-cv-blocks` — LLM CV block matching
+- `GET /linkedin/search` — LinkedIn public job search (`keywords`, `location`, `jobage`, `remote`, `page`); results carry a `tracked` flag
+- `GET|PUT /profile` — candidate profile markdown (drives fit scoring, generation, gap analysis)
+- `POST /jobs/{id}/evaluate-fit`, `GET /jobs/{id}/fit` — weighted fit score card
+- `GET /gap-analysis` — skill gap heatmap
+- `POST /jobs` returns 409 with the existing job id when URL or role+company is already tracked
 - `POST /jobs/{id}/generate-cv` — generate CV from lego blocks
 - `POST /jobs/{id}/generate-cover-letter` — AI cover letter
 - `GET /jobs/{id}/contact-history`, `POST /jobs/{id}/contact-history`
@@ -145,7 +158,7 @@ psql -d cv_maker_db -f backend/migrations/001_add_jobhunt_tables.sql  # run a mi
 | File | Purpose |
 |---|---|
 | `docker-compose.yml` | Service definitions |
-| `backend/Dockerfile` | Python 3.13-slim + pip + Playwright/Chromium |
+| `backend/Dockerfile` | Python 3.13-slim; deps installed from `pyproject.toml`/`uv.lock` via `uv export` (no requirements.txt) |
 | `backend/entrypoint.sh` | Waits for Postgres, then starts uvicorn |
 | `frontend/Dockerfile` | Multi-stage: Vite build → nginx |
 | `frontend/nginx.conf` | Serves SPA; proxies `/api/*` → `http://backend:8192/*` |
