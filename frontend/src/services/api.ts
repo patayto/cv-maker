@@ -239,15 +239,53 @@ export interface CVGenerationResponse {
   checks: Record<string, boolean> | null;
 }
 
+// Generation runs for minutes on the backend, so the POST endpoints return a
+// task id immediately and we poll until the task finishes.
+export interface GenerationTaskCreated {
+  task_id: string;
+  status: string;
+}
+
+export interface GenerationTaskStatus {
+  task_id: string;
+  kind: string;
+  status: 'running' | 'done' | 'failed';
+  error: string | null;
+  result: unknown;
+}
+
+const GENERATION_POLL_INTERVAL_MS = 4000;
+const GENERATION_POLL_TIMEOUT_MS = 30 * 60 * 1000;
+
+async function pollGenerationTask<T>(taskId: string): Promise<T> {
+  const deadline = Date.now() + GENERATION_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, GENERATION_POLL_INTERVAL_MS));
+    const { data } = await api.get<GenerationTaskStatus>(`/generation-tasks/${taskId}`);
+    if (data.status === 'done') return data.result as T;
+    if (data.status === 'failed') throw new Error(data.error ?? 'Generation failed.');
+  }
+  throw new Error('Generation timed out after 30 minutes.');
+}
+
 export const cvApi = {
   getCVSuggestions: async (jobId: number): Promise<CVSuggestionsResponse> => {
     const response = await api.get<CVSuggestionsResponse>(`/jobs/${jobId}/cv-suggestions`);
     return response.data;
   },
 
+  getGeneratedCV: async (jobId: number): Promise<CVGenerationResponse | null> => {
+    try {
+      const response = await api.get<CVGenerationResponse>(`/jobs/${jobId}/generated-cv`);
+      return response.data;
+    } catch {
+      return null;
+    }
+  },
+
   generateCV: async (jobId: number, request: CVGenerationRequest = {}): Promise<CVGenerationResponse> => {
-    const response = await api.post<CVGenerationResponse>(`/jobs/${jobId}/generate-cv`, request);
-    return response.data;
+    const response = await api.post<GenerationTaskCreated>(`/jobs/${jobId}/generate-cv`, request);
+    return pollGenerationTask<CVGenerationResponse>(response.data.task_id);
   },
 };
 
@@ -271,15 +309,24 @@ export interface CoverLetterUpdateRequest {
 }
 
 export const coverLetterApi = {
+  getGeneratedCoverLetter: async (jobId: number): Promise<CoverLetterGenerationResponse | null> => {
+    try {
+      const response = await api.get<CoverLetterGenerationResponse>(`/jobs/${jobId}/generated-cover-letter`);
+      return response.data;
+    } catch {
+      return null;
+    }
+  },
+
   generateCoverLetter: async (
     jobId: number,
     request: CoverLetterGenerationRequest = {}
   ): Promise<CoverLetterGenerationResponse> => {
-    const response = await api.post<CoverLetterGenerationResponse>(
+    const response = await api.post<GenerationTaskCreated>(
       `/jobs/${jobId}/generate-cover-letter`,
       request
     );
-    return response.data;
+    return pollGenerationTask<CoverLetterGenerationResponse>(response.data.task_id);
   },
 
   updateCoverLetter: async (

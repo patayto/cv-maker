@@ -137,8 +137,11 @@ psql -d cv_maker_db -f backend/migrations/001_add_jobhunt_tables.sql  # run a mi
 - `POST /jobs/{id}/evaluate-fit`, `GET /jobs/{id}/fit` — weighted fit score card
 - `GET /gap-analysis` — skill gap heatmap
 - `POST /jobs` returns 409 with the existing job id when URL or role+company is already tracked
-- `POST /jobs/{id}/generate-cv` — generate CV from lego blocks
-- `POST /jobs/{id}/generate-cover-letter` — AI cover letter
+- `POST /jobs/{id}/generate-cv` — start async CV generation; returns `{task_id, status}` immediately (HTTP 202)
+- `POST /jobs/{id}/generate-cover-letter` — start async cover letter generation; returns `{task_id, status}` immediately (HTTP 202)
+- `GET /generation-tasks/{task_id}` — poll generation status (`running` → `done`/`failed`); result contains the full CV/cover letter payload on success
+- `GET /jobs/{id}/generated-cv` — fetch the most recently persisted CV for a job (404 if none)
+- `GET /jobs/{id}/generated-cover-letter` — fetch the most recently persisted cover letter for a job (404 if none)
 - `GET /jobs/{id}/contact-history`, `POST /jobs/{id}/contact-history`
 - `GET /health` — health check (no auth)
 
@@ -158,7 +161,7 @@ psql -d cv_maker_db -f backend/migrations/001_add_jobhunt_tables.sql  # run a mi
 | File | Purpose |
 |---|---|
 | `docker-compose.yml` | Service definitions |
-| `backend/Dockerfile` | Python 3.13-slim; deps installed from `pyproject.toml`/`uv.lock` via `uv export` (no requirements.txt) |
+| `backend/Dockerfile` | Python 3.13-slim + TeX Live (lualatex/xelatex for PDF generation); deps installed from `pyproject.toml`/`uv.lock` via `uv export` (no requirements.txt) |
 | `backend/entrypoint.sh` | Waits for Postgres, then starts uvicorn |
 | `frontend/Dockerfile` | Multi-stage: Vite build → nginx |
 | `frontend/nginx.conf` | Serves SPA; proxies `/api/*` → `http://backend:8192/*` |

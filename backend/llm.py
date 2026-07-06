@@ -70,6 +70,13 @@ def complete(client: OpenAI, prompt: str) -> str:
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0,
                 )
+                # OpenRouter can return HTTP 200 with choices=None and the
+                # real error in the body (e.g. upstream rate limiting)
+                if not response.choices:
+                    error = getattr(response, "error", None)
+                    last_error = RuntimeError(f"{model} returned no choices: {error or 'unknown error'}")
+                    logger.warning(f"OpenRouter model {model} failed (cycle {cycle + 1}): {last_error}")
+                    continue
                 content = response.choices[0].message.content
                 if content:
                     return content

@@ -10,12 +10,11 @@ RUN pip install --no-cache-dir uv \
     && pip install --no-cache-dir -r requirements.txt \
     && rm requirements.txt
 
-# CV/cover-letter PDF generation needs lualatex + xelatex. Not installed by
-# default (TeX Live adds ~2GB); the API returns a clear error without it.
-# To enable, uncomment:
-# RUN apt-get update && apt-get install -y --no-install-recommends \
-#     texlive-luatex texlive-xetex texlive-latex-extra texlive-fonts-extra \
-#     && rm -rf /var/lib/apt/lists/*
+# CV/cover-letter PDF generation needs lualatex + xelatex (TeX Live adds ~2GB;
+# remove this layer for a slim image without document generation)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    texlive-luatex texlive-xetex texlive-latex-extra texlive-fonts-extra \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy backend source
 COPY backend/ ./backend/

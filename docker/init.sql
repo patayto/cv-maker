@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS generated_cvs (
     job_id          INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
     selected_blocks INTEGER[],
     customizations  JSONB,
+    latex           TEXT,
     pdf_path        TEXT,
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -92,6 +93,7 @@ CREATE TABLE IF NOT EXISTS generated_cover_letters (
     job_id          INTEGER REFERENCES jobs(id) ON DELETE CASCADE,
     content         TEXT NOT NULL,
     template_used   VARCHAR(100),
+    pdf_path        TEXT,
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

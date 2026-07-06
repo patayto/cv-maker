@@ -106,7 +106,8 @@ class GeneratedCV(Base):
     job_id = Column(Integer, ForeignKey('jobs.id'))
     selected_blocks = Column(ARRAY(Integer))  # Array of LegoBlock IDs
     customizations = Column(JSONB)  # Store any custom modifications
-    pdf_path = Column(Text)  # Path to generated PDF
+    latex = Column(Text)
+    pdf_path = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationship

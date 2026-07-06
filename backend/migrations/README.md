@@ -98,6 +98,20 @@ DROP TRIGGER IF EXISTS trigger_lego_blocks_updated_at ON lego_blocks;
 DROP FUNCTION IF EXISTS update_lego_blocks_updated_at();
 ```
 
+## Schema fixes (applied 2026-07-06 — no migration file, run manually)
+
+Two columns were missing from the schema created by `001_add_jobhunt_tables.sql` and `docker/init.sql`:
+
+```sql
+-- generated_cvs: store the LaTeX source so it can be displayed without regenerating
+ALTER TABLE generated_cvs ADD COLUMN IF NOT EXISTS latex TEXT;
+
+-- generated_cover_letters: store PDF path (was in ORM model but missing from SQL schema)
+ALTER TABLE generated_cover_letters ADD COLUMN IF NOT EXISTS pdf_path TEXT;
+```
+
+Both columns are now present in `docker/init.sql` for fresh installs. Existing databases need the two `ALTER TABLE` statements above applied once.
+
 ## Notes
 
 - All new tables use `SERIAL` for auto-incrementing primary keys

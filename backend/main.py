@@ -1,10 +1,10 @@
-from fastapi import FastAPI, Depends, HTTPException, Query, Body, UploadFile, File
+from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException, Query, Body, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from database import get_db, engine
+from database import get_db, engine, SessionLocal
 from models import Base, ApplicationStatus
 import models
 import schemas
@@ -21,9 +21,13 @@ from lego_blocks_matcher import get_matcher
 from auth import verify_auth
 from pydantic import BaseModel
 import aiofiles
+import logging
 import os
+import time
 from pathlib import Path
 import uuid
+
+logger = logging.getLogger(__name__)
 
 # Create database tables (if they don't exist)
 # Note: In production, use Alembic migrations instead
@@ -581,34 +585,47 @@ def get_cv_suggestions(job_id: int, db: Session = Depends(get_db), username: str
         raise HTTPException(status_code=500, detail=f"Failed to get CV suggestions: {str(e)}")
 
 
-@app.post("/jobs/{job_id}/generate-cv", response_model=schemas.CVGenerationResponse)
-def generate_cv(
-    job_id: int,
-    request: schemas.CVGenerationRequest,
-    db: Session = Depends(get_db),
-    username: str = Depends(verify_auth)
-):
-    """Generate a tailored 2-page CV: draft -> review -> compile -> verify."""
+# Generation runs for several minutes (multiple LLM calls + LaTeX compile),
+# far longer than proxy/browser timeouts, so the POST endpoints only start a
+# background task and the frontend polls GET /generation-tasks/{task_id}.
+# In-memory registry is fine for this single-process app; a restart just
+# means the client re-requests generation.
+generation_tasks: dict = {}
+
+
+def _create_generation_task(kind: str) -> str:
+    # Drop finished tasks older than an hour so the registry doesn't grow forever
+    cutoff = time.time() - 3600
+    for tid in [tid for tid, t in generation_tasks.items()
+                if t["status"] != "running" and t["created_at"] < cutoff]:
+        generation_tasks.pop(tid, None)
+
+    task_id = str(uuid.uuid4())
+    generation_tasks[task_id] = {
+        "kind": kind,
+        "status": "running",
+        "error": None,
+        "result": None,
+        "created_at": time.time(),
+    }
+    return task_id
+
+
+def _run_cv_generation(task_id: str, job_id: int, max_blocks: int):
     from cv_generator import cv_generator
 
-    job = db.query(models.Job).filter(models.Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    selected_blocks = cv_generator.select_blocks(job_id, db, max_blocks=request.max_blocks)
-
+    task = generation_tasks[task_id]
+    db = SessionLocal()
     try:
+        job = db.query(models.Job).filter(models.Job.id == job_id).first()
+        selected_blocks = cv_generator.select_blocks(job_id, db, max_blocks=max_blocks)
         result = document_pipeline.generate_cv(job, selected_blocks)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except (RuntimeError, latex_service.LatexCompileError) as e:
-        raise HTTPException(status_code=503, detail=f"CV generation failed: {e}")
 
-    try:
         generated_cv = models.GeneratedCV(
             job_id=job_id,
             selected_blocks=[block.id for block in selected_blocks],
             customizations={},
+            latex=result["latex"],
             pdf_path=result["pdf_path"],
         )
         db.add(generated_cv)
@@ -619,51 +636,40 @@ def generate_cv(
         job.generated_cv_id = generated_cv.id
         job.cv = result["pdf_path"]
         db.commit()
+
+        task["result"] = schemas.CVGenerationResponse(
+            cv_id=generated_cv.id,
+            selected_blocks=[schemas.LegoBlockResponse.from_orm(block) for block in selected_blocks],
+            latex=result["latex"],
+            pdf_path=result["pdf_path"],
+            page_count=result["page_count"],
+            checks=result["checks"],
+        ).model_dump()
+        task["status"] = "done"
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to store generated CV: {e}")
-
-    return schemas.CVGenerationResponse(
-        cv_id=generated_cv.id,
-        selected_blocks=[schemas.LegoBlockResponse.from_orm(block) for block in selected_blocks],
-        latex=result["latex"],
-        pdf_path=result["pdf_path"],
-        page_count=result["page_count"],
-        checks=result["checks"],
-    )
+        logger.exception(f"CV generation task {task_id} failed")
+        task["error"] = f"CV generation failed: {e}"
+        task["status"] = "failed"
+    finally:
+        db.close()
 
 
-# ==================== COVER LETTER ENDPOINTS ====================
-
-@app.post("/jobs/{job_id}/generate-cover-letter", response_model=schemas.CoverLetterGenerationResponse)
-def generate_cover_letter(
-    job_id: int,
-    request: schemas.CoverLetterGenerationRequest,
-    db: Session = Depends(get_db),
-    username: str = Depends(verify_auth)
-):
-    """Generate a tailored 1-page cover letter: draft -> review -> compile -> verify."""
+def _run_cover_letter_generation(task_id: str, job_id: int, style: str):
     from cv_generator import cv_generator
 
-    job = db.query(models.Job).filter(models.Job.id == job_id).first()
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    # Reuse the CV block selection so the letter draws on the same evidence
-    selected_blocks = cv_generator.select_blocks(job_id, db, max_blocks=5)
-
+    task = generation_tasks[task_id]
+    db = SessionLocal()
     try:
+        job = db.query(models.Job).filter(models.Job.id == job_id).first()
+        # Reuse the CV block selection so the letter draws on the same evidence
+        selected_blocks = cv_generator.select_blocks(job_id, db, max_blocks=5)
         result = document_pipeline.generate_cover_letter(job, selected_blocks)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except (RuntimeError, latex_service.LatexCompileError) as e:
-        raise HTTPException(status_code=503, detail=f"Cover letter generation failed: {e}")
 
-    try:
         generated_letter = models.GeneratedCoverLetter(
             job_id=job_id,
             content=result["latex"],
-            template_used=request.style,
+            template_used=style,
             pdf_path=result["pdf_path"],
         )
         db.add(generated_letter)
@@ -674,17 +680,116 @@ def generate_cover_letter(
         job.generated_cover_letter_id = generated_letter.id
         job.cover_letter = result["pdf_path"]
         db.commit()
+
+        task["result"] = schemas.CoverLetterGenerationResponse(
+            letter_id=generated_letter.id,
+            content=result["latex"],
+            pdf_path=result["pdf_path"],
+            page_count=result["page_count"],
+            checks=result["checks"],
+        ).model_dump()
+        task["status"] = "done"
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to store cover letter: {e}")
+        logger.exception(f"Cover letter generation task {task_id} failed")
+        task["error"] = f"Cover letter generation failed: {e}"
+        task["status"] = "failed"
+    finally:
+        db.close()
 
-    return schemas.CoverLetterGenerationResponse(
-        letter_id=generated_letter.id,
-        content=result["latex"],
-        pdf_path=result["pdf_path"],
-        page_count=result["page_count"],
-        checks=result["checks"],
+
+@app.post("/jobs/{job_id}/generate-cv", response_model=schemas.GenerationTaskCreated, status_code=202)
+def generate_cv(
+    job_id: int,
+    request: schemas.CVGenerationRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    username: str = Depends(verify_auth)
+):
+    """Start CV generation (draft -> review -> compile -> verify) as a background task."""
+    job = db.query(models.Job).filter(models.Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    task_id = _create_generation_task("cv")
+    background_tasks.add_task(_run_cv_generation, task_id, job_id, request.max_blocks)
+    return schemas.GenerationTaskCreated(task_id=task_id)
+
+
+@app.get("/generation-tasks/{task_id}", response_model=schemas.GenerationTaskStatus)
+def get_generation_task(task_id: str, username: str = Depends(verify_auth)):
+    """Poll the status of a CV / cover letter generation task."""
+    task = generation_tasks.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Generation task not found (it may have expired or the server restarted)")
+    return schemas.GenerationTaskStatus(
+        task_id=task_id,
+        kind=task["kind"],
+        status=task["status"],
+        error=task["error"],
+        result=task["result"],
     )
+
+
+@app.get("/jobs/{job_id}/generated-cv", response_model=schemas.CVGenerationResponse)
+def get_generated_cv(job_id: int, db: Session = Depends(get_db), username: str = Depends(verify_auth)):
+    """Return the most recently generated CV for this job, or 404 if none exists."""
+    row = (
+        db.query(models.GeneratedCV)
+        .filter(models.GeneratedCV.job_id == job_id)
+        .order_by(models.GeneratedCV.created_at.desc())
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="No generated CV found for this job")
+    return schemas.CVGenerationResponse(
+        cv_id=row.id,
+        selected_blocks=[],
+        latex=row.latex or "",
+        pdf_path=row.pdf_path,
+        page_count=None,
+        checks=None,
+    )
+
+
+@app.get("/jobs/{job_id}/generated-cover-letter", response_model=schemas.CoverLetterGenerationResponse)
+def get_generated_cover_letter(job_id: int, db: Session = Depends(get_db), username: str = Depends(verify_auth)):
+    """Return the most recently generated cover letter for this job, or 404 if none exists."""
+    row = (
+        db.query(models.GeneratedCoverLetter)
+        .filter(models.GeneratedCoverLetter.job_id == job_id)
+        .order_by(models.GeneratedCoverLetter.created_at.desc())
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="No generated cover letter found for this job")
+    return schemas.CoverLetterGenerationResponse(
+        letter_id=row.id,
+        content=row.content,
+        pdf_path=row.pdf_path,
+        page_count=None,
+        checks=None,
+    )
+
+
+# ==================== COVER LETTER ENDPOINTS ====================
+
+@app.post("/jobs/{job_id}/generate-cover-letter", response_model=schemas.GenerationTaskCreated, status_code=202)
+def generate_cover_letter(
+    job_id: int,
+    request: schemas.CoverLetterGenerationRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    username: str = Depends(verify_auth)
+):
+    """Start cover letter generation (draft -> review -> compile -> verify) as a background task."""
+    job = db.query(models.Job).filter(models.Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    task_id = _create_generation_task("cover_letter")
+    background_tasks.add_task(_run_cover_letter_generation, task_id, job_id, request.style)
+    return schemas.GenerationTaskCreated(task_id=task_id)
 
 
 @app.put("/generated-cover-letters/{letter_id}", response_model=schemas.CoverLetterGenerationResponse)

@@ -20,6 +20,10 @@ export default function CVGenerator({ job }: CVGeneratorProps) {
       .getCVSuggestions(job.id)
       .then((data) => { if (!cancelled) setSuggestions(data.suggestions.slice(0, 10)); })
       .catch((err) => console.error('CV suggestions error:', err));
+    cvApi
+      .getGeneratedCV(job.id)
+      .then((existing) => { if (!cancelled && existing) setResult(existing); })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, [job.id]);
 
@@ -29,8 +33,8 @@ export default function CVGenerator({ job }: CVGeneratorProps) {
     try {
       setResult(await cvApi.generateCV(job.id));
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { detail?: string } } };
-      setError(e.response?.data?.detail || 'CV generation failed.');
+      const e = err as { response?: { data?: { detail?: string } }; message?: string };
+      setError(e.response?.data?.detail || e.message || 'CV generation failed.');
       console.error('CV generation error:', err);
     } finally {
       setGenerating(false);

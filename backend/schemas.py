@@ -283,6 +283,19 @@ class CVGenerationResponse(BaseModel):
     checks: Optional[Dict[str, bool]] = None
 
 
+class GenerationTaskCreated(BaseModel):
+    task_id: str
+    status: str = "running"
+
+
+class GenerationTaskStatus(BaseModel):
+    task_id: str
+    kind: str  # "cv" or "cover_letter"
+    status: str  # "running", "done" or "failed"
+    error: Optional[str] = None
+    result: Optional[Dict] = None  # CVGenerationResponse / CoverLetterGenerationResponse dump
+
+
 # ==================== COVER LETTER SCHEMAS ====================
 
 class CoverLetterGenerationRequest(BaseModel):

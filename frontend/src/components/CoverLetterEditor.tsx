@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { coverLetterApi, API_BASE_URL } from '../services/api';
 import type { CoverLetterGenerationResponse } from '../services/api';
 import type { Job } from '../types/job';
@@ -15,14 +15,23 @@ export default function CoverLetterEditor({ job }: CoverLetterEditorProps) {
   const [error, setError] = useState<string | null>(null);
   const [showLatex, setShowLatex] = useState(false);
 
+  useEffect(() => {
+    let cancelled = false;
+    coverLetterApi
+      .getGeneratedCoverLetter(job.id)
+      .then((existing) => { if (!cancelled && existing) setResult(existing); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [job.id]);
+
   const handleGenerate = async () => {
     setGenerating(true);
     setError(null);
     try {
       setResult(await coverLetterApi.generateCoverLetter(job.id));
     } catch (err: unknown) {
-      const e = err as { response?: { data?: { detail?: string } } };
-      setError(e.response?.data?.detail || 'Cover letter generation failed.');
+      const e = err as { response?: { data?: { detail?: string } }; message?: string };
+      setError(e.response?.data?.detail || e.message || 'Cover letter generation failed.');
       console.error('Cover letter generation error:', err);
     } finally {
       setGenerating(false);
