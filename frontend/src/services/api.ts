@@ -1,6 +1,23 @@
 import axios from 'axios';
 import type { Job, JobCreate, JobUpdate, ApplicationStatus, ContactHistory, StalenessInfo, FollowUpMessage, FitEvaluation } from '../types/job';
 
+export interface BulkAddItemResult {
+  url: string;
+  status: 'created' | 'duplicate' | 'failed';
+  job_id: number | null;
+  role: string | null;
+  company: string | null;
+  error: string | null;
+}
+
+export interface BulkAddResponse {
+  total: number;
+  created: number;
+  duplicates: number;
+  failed: number;
+  results: BulkAddItemResult[];
+}
+
 export interface LinkedInJobCard {
   id: string;
   title: string;
@@ -67,6 +84,12 @@ export const jobsApi = {
   // Create a new job
   createJob: async (job: JobCreate): Promise<Job> => {
     const response = await api.post<Job>('/jobs', job);
+    return response.data;
+  },
+
+  // Parse a list of URLs and create a job entry for each
+  bulkAddJobs: async (urls: string[]): Promise<BulkAddResponse> => {
+    const response = await api.post<BulkAddResponse>('/jobs/bulk-add', { urls });
     return response.data;
   },
 

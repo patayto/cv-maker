@@ -24,6 +24,7 @@ import aiofiles
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import uuid
 
@@ -288,6 +289,95 @@ def create_job(job: schemas.JobCreate, db: Session = Depends(get_db), username: 
             },
         )
     return crud.create_job(db=db, job=job)
+
+# BULK ADD
+class BulkAddRequest(BaseModel):
+    urls: List[str]
+    use_llm: bool = True
+
+class BulkAddItemResult(BaseModel):
+    url: str
+    status: str  # "created", "duplicate" or "failed"
+    job_id: Optional[int] = None
+    role: Optional[str] = None
+    company: Optional[str] = None
+    error: Optional[str] = None
+
+class BulkAddResponse(BaseModel):
+    total: int
+    created: int
+    duplicates: int
+    failed: int
+    results: List[BulkAddItemResult]
+
+MAX_BULK_URLS = 20
+
+@app.post("/jobs/bulk-add", response_model=BulkAddResponse)
+def bulk_add_jobs(request: BulkAddRequest, db: Session = Depends(get_db), username: str = Depends(verify_auth)):
+    """Parse a list of job posting URLs and create a job entry for each one.
+
+    URLs are parsed in parallel; each result is reported individually so one
+    bad URL doesn't fail the whole batch.
+    """
+    # Deduplicate while preserving order
+    urls = list(dict.fromkeys(u.strip() for u in request.urls if u.strip()))
+    if not urls:
+        raise HTTPException(status_code=400, detail="No URLs provided")
+    if len(urls) > MAX_BULK_URLS:
+        raise HTTPException(status_code=400, detail=f"Too many URLs (max {MAX_BULK_URLS} per batch)")
+
+    def parse(url: str):
+        try:
+            job_data, _ = job_parser.parse_job_url(url, use_llm=request.use_llm)
+            return job_data, None
+        except Exception as e:
+            return None, str(e)
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        parsed = list(pool.map(parse, urls))
+
+    job_fields = set(schemas.JobBase.model_fields)
+    results = []
+    for url, (job_data, error) in zip(urls, parsed):
+        if error or not job_data:
+            results.append(BulkAddItemResult(url=url, status="failed", error=error or "Parsing failed"))
+            continue
+
+        role, company = job_data.get("role"), job_data.get("company")
+        if not role or not company:
+            results.append(BulkAddItemResult(
+                url=url, status="failed", role=role, company=company,
+                error="Could not extract role and company from the posting",
+            ))
+            continue
+
+        existing = crud.find_duplicate_job(db=db, url=url, role=role, company=company)
+        if existing:
+            results.append(BulkAddItemResult(
+                url=url, status="duplicate", job_id=existing.id,
+                role=existing.role, company=existing.company,
+            ))
+            continue
+
+        payload = {k: v for k, v in job_data.items() if k in job_fields and v is not None}
+        payload["url"] = url
+        payload["status"] = ApplicationStatus.yet_to_apply
+        try:
+            job = crud.create_job(db=db, job=schemas.JobCreate(**payload))
+            results.append(BulkAddItemResult(
+                url=url, status="created", job_id=job.id, role=job.role, company=job.company,
+            ))
+        except Exception as e:
+            db.rollback()
+            results.append(BulkAddItemResult(url=url, status="failed", role=role, company=company, error=str(e)))
+
+    return BulkAddResponse(
+        total=len(results),
+        created=sum(1 for r in results if r.status == "created"),
+        duplicates=sum(1 for r in results if r.status == "duplicate"),
+        failed=sum(1 for r in results if r.status == "failed"),
+        results=results,
+    )
 
 # READ
 @app.get("/jobs", response_model=List[schemas.JobResponse])

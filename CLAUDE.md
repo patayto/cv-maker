@@ -137,6 +137,7 @@ psql -d cv_maker_db -f backend/migrations/001_add_jobhunt_tables.sql  # run a mi
 - `POST /jobs/{id}/evaluate-fit`, `GET /jobs/{id}/fit` — weighted fit score card
 - `GET /gap-analysis` — skill gap heatmap
 - `POST /jobs` returns 409 with the existing job id when URL or role+company is already tracked
+- `POST /jobs/bulk-add` — parse up to 20 URLs (in parallel) and create a job for each; returns per-URL results (`created`/`duplicate`/`failed`) plus summary counts
 - `POST /jobs/{id}/generate-cv` — start async CV generation; returns `{task_id, status}` immediately (HTTP 202)
 - `POST /jobs/{id}/generate-cover-letter` — start async cover letter generation; returns `{task_id, status}` immediately (HTTP 202)
 - `GET /generation-tasks/{task_id}` — poll generation status (`running` → `done`/`failed`); result contains the full CV/cover letter payload on success

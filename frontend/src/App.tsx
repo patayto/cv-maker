@@ -3,6 +3,7 @@ import JobList from './components/JobList';
 import JobForm from './components/JobForm';
 import JobView from './components/JobView';
 import JobSearch from './components/JobSearch';
+import BulkAddModal from './components/BulkAddModal';
 import ProfileEditor from './components/ProfileEditor';
 import GapAnalysis from './components/GapAnalysis';
 import { jobsApi } from './services/api';
@@ -15,6 +16,15 @@ function App() {
   const [currentJob, setCurrentJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [importUrl, setImportUrl] = useState<string | null>(null);
+  const [showBulkAdd, setShowBulkAdd] = useState(false);
+  const [jobListKey, setJobListKey] = useState(0);
+
+  const handleBulkAddClose = (createdAny: boolean) => {
+    setShowBulkAdd(false);
+    if (createdAny) {
+      setJobListKey((k) => k + 1); // Remount JobList so new entries appear
+    }
+  };
 
   const handleNewJob = () => {
     setCurrentJob(null);
@@ -103,6 +113,12 @@ function App() {
                   {viewMode === 'search' ? '← My Jobs' : '🔍 Search Jobs'}
                 </button>
                 <button
+                  onClick={() => setShowBulkAdd(true)}
+                  className="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors font-medium"
+                >
+                  📥 Bulk Add
+                </button>
+                <button
                   onClick={handleNewJob}
                   className="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 transition-colors font-medium"
                 >
@@ -123,6 +139,7 @@ function App() {
         )}
         {viewMode === 'list' && (
           <JobList
+            key={jobListKey}
             onView={handleViewJob}
             onEdit={handleEditJob}
           />
@@ -162,6 +179,8 @@ function App() {
           />
         )}
       </main>
+
+      {showBulkAdd && <BulkAddModal onClose={handleBulkAddClose} />}
 
       {/* Footer */}
       <footer className="bg-white border-t border-gray-200 mt-12">
