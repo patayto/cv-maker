@@ -74,6 +74,8 @@ def complete(client: OpenAI, prompt: str) -> str:
                 # real error in the body (e.g. upstream rate limiting)
                 if not response.choices:
                     error = getattr(response, "error", None)
+                    if _is_daily_quota_error(error):
+                        raise _daily_quota_exceeded(error)
                     last_error = RuntimeError(f"{model} returned no choices: {error or 'unknown error'}")
                     logger.warning(f"OpenRouter model {model} failed (cycle {cycle + 1}): {last_error}")
                     continue
@@ -81,8 +83,33 @@ def complete(client: OpenAI, prompt: str) -> str:
                 if content:
                     return content
                 last_error = RuntimeError(f"{model} returned empty content")
+            except DailyQuotaError:
+                raise
             except Exception as e:
+                if _is_daily_quota_error(e):
+                    raise _daily_quota_exceeded(e) from e
                 logger.warning(f"OpenRouter model {model} failed (cycle {cycle + 1}): {e}")
                 last_error = e
 
     raise RuntimeError(f"All configured OpenRouter models failed after {MAX_CYCLES} cycles: {last_error}")
+
+
+class DailyQuotaError(RuntimeError):
+    """Account-wide daily cap on free models was hit.
+
+    That bucket is shared by every :free model, so trying other models or
+    retrying cannot succeed until the quota resets (midnight UTC).
+    """
+
+
+def _is_daily_quota_error(error) -> bool:
+    return "free-models-per-day" in str(error)
+
+
+def _daily_quota_exceeded(error) -> DailyQuotaError:
+    message = (
+        "OpenRouter free-model daily quota exhausted (resets midnight UTC); "
+        f"skipping remaining model retries: {error}"
+    )
+    logger.warning(message)
+    return DailyQuotaError(message)
